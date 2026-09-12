@@ -22,9 +22,13 @@ const client = new MongoClient(uri, {
 });
     // Connect the client to the server	(optional starting in v4.7)
 client.connect().catch(console.dir);
-const foodsCollection = client.db("HiddenPrealDB").collection("foods")
+const foodsCollections = client.db("HiddenPearlDB").collection("foods");
 
 
+app.get("/foods", async(req, res)=>{
+    const result = await foodsCollections.find().toArray();
+    res.send(result)
+})
 
 
     // Send a ping to confirm a successful connection

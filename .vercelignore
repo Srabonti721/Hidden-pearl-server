@@ -1,0 +1,5 @@
+node_modules
+.env
+firebase-admin-service-api-key.json
+.git
+README.md

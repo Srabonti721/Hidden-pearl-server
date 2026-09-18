@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
+
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(cors());
@@ -12,6 +13,7 @@ app.use(express.json());
 const uri =
     process.env.MONGODB_URI ||
     `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.efzq5bn.mongodb.net/?appName=Cluster0`;
+    
 const jwtSecret = process.env.JWT_SIGN_SECRET;
 
 // Connect lazily and cache the connection so Vercel serverless functions can
@@ -28,7 +30,6 @@ function getCollections() {
         });
         dbPromise = client.connect().then(async () => {
             await client.db("admin").command({ ping: 1 });
-            console.log("Connected to MongoDB.");
             return {
                 client,
                 foods: client.db("HiddenPearlDB").collection("foods"),
@@ -42,7 +43,7 @@ function getCollections() {
 const isValidId = (id) => ObjectId.isValid(id);
 
 function decodeToken(req) {
-    const authHeader = req.headers.authorization;
+    const authHeader = req.headers?.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
     try {
         return jwt.verify(authHeader.split(" ")[1], jwtSecret);
@@ -53,7 +54,7 @@ function decodeToken(req) {
 
 const verifyJWT = (req, res, next) => {
     const decoded = decodeToken(req);
-    if (!decoded) {
+    if (!decoded?.email) {
         return res.status(401).json({ message: "Unauthorized access." });
     }
     req.decoded = decoded;
@@ -89,7 +90,8 @@ function foodPayload(body, partial = false) {
 }
 
 function foodOwner(food) {
-    const owner = food?.addedBy || food?.userEmail || food?.email || food?.addedByEmail;
+    const owner =
+        food?.addedBy || food?.userEmail || food?.email || food?.addedByEmail;
     return typeof owner === "object" ? owner?.email : owner;
 }
 
@@ -108,22 +110,31 @@ app.post("/jwt", (req, res) => {
 app.get("/foods", async (req, res, next) => {
     try {
         if (req.query.email) {
-            const decoded = decodeToken(req);
-            if (!decoded)
+            const decoded = req.decoded || decodeToken(req);
+            if (!decoded?.email) {
                 return res
                     .status(401)
                     .json({ message: "Unauthorized access." });
-            if (req.query.email.toLowerCase() !== decoded.email.toLowerCase())
-                return res
-                    .status(403)
-                    .json({ message: "Forbidden access." });
+            }
+            if (req.query.email.toLowerCase() !== decoded.email.toLowerCase()) {
+                return res.status(403).json({
+                    message: "Forbidden access.",
+                });
+            }
         }
 
         const { foods } = await getCollections();
         const { category, email, search, page, limit } = req.query;
         const query = {};
         if (category) query.category = category;
-        if (email) query.$or = [{ email }, { userEmail: email }];
+        if (email)
+            query.$or = [
+                { email },
+                { userEmail: email },
+                { addedBy: email },
+                { "addedBy.email": email },
+                { addedByEmail: email },
+            ];
         if (search)
             query.$or = [
                 { name: { $regex: search, $options: "i" } },
@@ -198,9 +209,7 @@ app.post("/foods", verifyJWT, async (req, res, next) => {
     try {
         const food = foodPayload(req.body);
         if (!food.name && !food.foodName)
-            return res
-                .status(400)
-                .json({ message: "Food name is required." });
+            return res.status(400).json({ message: "Food name is required." });
         const { foods } = await getCollections();
         const result = await foods.insertOne(food);
         res.status(201).json({
@@ -228,11 +237,9 @@ app.patch("/foods/:id", verifyJWT, async (req, res, next) => {
 
         const updates = foodPayload(req.body, true);
         if (Object.keys(updates).length === 1)
-            return res
-                .status(400)
-                .json({
-                    message: "Provide at least one field to update.",
-                });
+            return res.status(400).json({
+                message: "Provide at least one field to update.",
+            });
         const result = await foods.updateOne(
             { _id: new ObjectId(req.params.id) },
             { $set: updates },
@@ -275,9 +282,7 @@ app.get("/purchases", verifyJWT, async (req, res, next) => {
             req.query.email &&
             query.buyerEmail?.toLowerCase() !== req.decoded.email.toLowerCase()
         )
-            return res
-                .status(403)
-                .json({ message: "Forbidden access." });
+            return res.status(403).json({ message: "Forbidden access." });
         const { purchases } = await getCollections();
         res.json(
             await purchases
@@ -297,33 +302,22 @@ app.post("/purchases", verifyJWT, async (req, res, next) => {
             return res
                 .status(400)
                 .json({ message: "A valid food id is required." });
-        if (
-            !buyerEmail ||
-            !Number.isInteger(quantity) ||
-            quantity < 1
-        ) {
-            return res
-                .status(400)
-                .json({
-                    message:
-                        "Buyer email and a valid quantity are required.",
-                });
+        if (!buyerEmail || !Number.isInteger(quantity) || quantity < 1) {
+            return res.status(400).json({
+                message: "Buyer email and a valid quantity are required.",
+            });
         }
         if (buyerEmail.toLowerCase() !== req.decoded.email.toLowerCase())
-            return res
-                .status(403)
-                .json({ message: "Forbidden access." });
+            return res.status(403).json({ message: "Forbidden access." });
 
         const { foods, purchases } = await getCollections();
         const food = await foods.findOne({ _id: new ObjectId(foodId) });
         if (!food) return res.status(404).json({ message: "Food not found." });
         const ownerEmail = foodOwner(food);
         if (ownerEmail?.toLowerCase() === buyerEmail.toLowerCase()) {
-            return res
-                .status(403)
-                .json({
-                    message: "You cannot purchase your own food item.",
-                });
+            return res.status(403).json({
+                message: "You cannot purchase your own food item.",
+            });
         }
 
         const availableQuantity = Number(
@@ -333,12 +327,9 @@ app.post("/purchases", verifyJWT, async (req, res, next) => {
             !Number.isFinite(availableQuantity) ||
             availableQuantity < quantity
         ) {
-            return res
-                .status(409)
-                .json({
-                    message:
-                        "The requested quantity is no longer available.",
-                });
+            return res.status(409).json({
+                message: "The requested quantity is no longer available.",
+            });
         }
 
         const stockUpdate = await foods.updateOne(
@@ -349,12 +340,9 @@ app.post("/purchases", verifyJWT, async (req, res, next) => {
             },
         );
         if (!stockUpdate.modifiedCount)
-            return res
-                .status(409)
-                .json({
-                    message:
-                        "The requested quantity is no longer available.",
-                });
+            return res.status(409).json({
+                message: "The requested quantity is no longer available.",
+            });
 
         const purchase = {
             foodId: food._id.toString(),
@@ -391,9 +379,7 @@ app.delete("/purchases/:id", verifyJWT, async (req, res, next) => {
             purchase.buyerEmail?.toLowerCase() !==
             req.decoded.email.toLowerCase()
         )
-            return res
-                .status(403)
-                .json({ message: "Forbidden access." });
+            return res.status(403).json({ message: "Forbidden access." });
 
         const result = await purchases.deleteOne({
             _id: new ObjectId(req.params.id),
